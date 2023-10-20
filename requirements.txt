@@ -1,0 +1,4 @@
+aio_pika
+aioipfs
+requests
+rembg
