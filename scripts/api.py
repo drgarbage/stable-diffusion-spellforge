@@ -92,7 +92,7 @@ def decode_base64_to_image(encoding):
 def process_txt2img(args):
     from modules import scripts, shared
     from modules.shared import opts
-    from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
+    from modules.processing import StableDiffusionProcessingTxt2Img, process_images
     from contextlib import closing
     
     script_name = args.get('script_name', None)
@@ -108,8 +108,19 @@ def process_txt2img(args):
     for script in script_runner.scripts:
         if script.args_to is not None and max_args < script.args_to:
             max_args = script.args_to
+            
     full_script_args = [None]*max_args
     full_script_args[0] = 0
+
+    # get default values
+    with gr.Blocks(): # will throw errors calling ui function without this
+        for script in script_runner.scripts:
+            if script.ui(script.is_img2img):
+                ui_default_values = []
+                for elem in script.ui(script.is_img2img):
+                    ui_default_values.append(elem.value)
+                full_script_args[script.args_from:script.args_to] = ui_default_values
+                
 
     if script_name:
         script_index = [script.title().lower() for script in script_runner.selectable_scripts].index(script_name.lower())
@@ -156,7 +167,7 @@ def process_txt2img(args):
 def process_img2img(args):
     from modules import scripts, shared
     from modules.shared import opts
-    from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
+    from modules.processing import StableDiffusionProcessingImg2Img, process_images
     from contextlib import closing
 
     with closing(StableDiffusionProcessingImg2Img(sd_model=shared.sd_model, **args)) as p:
