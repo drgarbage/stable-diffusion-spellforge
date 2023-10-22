@@ -149,7 +149,7 @@ def process_image(api, args):
 
         try:
             shared.state.begin(job=job_name)
-            if script is not None:
+            if script_name is not None:
                 p.script_args = full_script_args
                 processed = script_runner.run(p, *p.script_args)
             else:
