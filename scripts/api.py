@@ -82,39 +82,44 @@ async def upload_images(images: list):
     return hashes
 
 
-
-def process_txt2img(args):
+def process_image(api, args):
+    from contextlib import closing
     from modules import scripts, shared
     from modules.shared import opts
-    from modules.processing import StableDiffusionProcessingTxt2Img, process_images
-    from contextlib import closing
+    from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
+
     script_name = args.get('script_name', None)
     script_args = args.get('script_args', [])
     alwayson_scripts = args.get('alwayson_scripts', None)
     script = None
 
-    script_runner = scripts.scripts_txt2img
+    if api == 'txt2img':
+        script_runner = scripts.scripts_txt2img
+        processing_class = StableDiffusionProcessingTxt2Img
+        outpath_grids = opts.outdir_txt2img_grids
+        outpath_samples = opts.outdir_txt2img_samples
+        job_name = "scripts_txt2img"
+    elif api == 'img2img':
+        script_runner = scripts.scripts_img2img
+        processing_class = StableDiffusionProcessingImg2Img
+        outpath_grids = opts.outdir_img2img_grids
+        outpath_samples = opts.outdir_img2img_samples
+        job_name = "scripts_img2img"
+    else:
+        raise ValueError("Invalid API")
+
     if not script_runner.scripts:
         script_runner.initialize_scripts(False)
 
-    # init script args
-    max_args = 1
-    for script in script_runner.scripts:
-        if script.args_to is not None and max_args < script.args_to:
-            max_args = script.args_to
-            
-    full_script_args = [None]*max_args
+    max_args = max((script.args_to for script in script_runner.scripts if script.args_to is not None), default=1)
+    full_script_args = [None] * max_args
     full_script_args[0] = 0
 
-    # get default values
-    with gr.Blocks(): # will throw errors calling ui function without this
+    with gr.Blocks():
         for script in script_runner.scripts:
             if script.ui(script.is_img2img):
-                ui_default_values = []
-                for elem in script.ui(script.is_img2img):
-                    ui_default_values.append(elem.value)
+                ui_default_values = [elem.value for elem in script.ui(script.is_img2img)]
                 full_script_args[script.args_from:script.args_to] = ui_default_values
-                
 
     if script_name:
         script_index = [script.title().lower() for script in script_runner.selectable_scripts].index(script_name.lower())
@@ -123,105 +128,30 @@ def process_txt2img(args):
         full_script_args[0] = script_index + 1
 
     if alwayson_scripts:
-        for alwayson_script_name in alwayson_scripts.keys():
+        for alwayson_script_name, alwayson_script_data in alwayson_scripts.items():
             alwayson_script = script_runner.scripts[[script.title().lower() for script in script_runner.scripts].index(alwayson_script_name.lower())]
-            if "args" in alwayson_scripts[alwayson_script_name]:
-                for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(alwayson_scripts[alwayson_script_name]['args']))):
-                    full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]['args'][idx]
+            if "args" in alwayson_script_data:
+                args_range = range(alwayson_script.args_from, alwayson_script.args_to)
+                for idx, arg in zip(args_range, alwayson_script_data['args']):
+                    full_script_args[idx] = arg
 
-    args.pop('script_name', None)
-    args.pop('script_args', None)
-    args.pop('alwayson_scripts', None)
-    args.pop('send_images', True)
-    args.pop('save_images', None)
+    for key in ['script_name', 'script_args', 'alwayson_scripts', 'send_images', 'save_images']:
+        args.pop(key, None)
 
     processed = []
 
-    with closing(StableDiffusionProcessingTxt2Img(sd_model=shared.sd_model, **args)) as p:
+    with closing(processing_class(sd_model=shared.sd_model, **args)) as p:
+        if api == 'img2img':
+            p.init_images = [decode_base64_to_image(x) for x in args.get('init_images')]
         p.is_api = False
-        p.outpath_grids = opts.outdir_txt2img_grids
-        p.outpath_samples = opts.outdir_txt2img_samples
+        p.outpath_grids = outpath_grids
+        p.outpath_samples = outpath_samples
 
         try:
-            shared.state.begin(job="scripts_txt2img")
+            shared.state.begin(job=job_name)
             if script_name is not None:
                 p.script_args = full_script_args
-                processed = scripts.scripts_txt2img.run(p, *p.script_args)
-            else:
-                p.script_args = tuple(full_script_args)
-                processed = process_images(p)
-        finally:
-            shared.state.end()
-            shared.total_tqdm.clear()
-
-    return processed
-
-
-def process_img2img(args):
-    from modules import scripts, shared
-    from modules.shared import opts
-    from modules.processing import StableDiffusionProcessingImg2Img, process_images
-    from contextlib import closing
-    script_name = args.get('script_name', None)
-    script_args = args.get('script_args', [])
-    alwayson_scripts = args.get('alwayson_scripts', None)
-    script = None
-
-    script_runner = scripts.scripts_img2img
-    if not script_runner.scripts:
-        script_runner.initialize_scripts(False)
-
-    # init script args
-    max_args = 1
-    for script in script_runner.scripts:
-        if script.args_to is not None and max_args < script.args_to:
-            max_args = script.args_to
-            
-    full_script_args = [None]*max_args
-    full_script_args[0] = 0
-
-    # get default values
-    with gr.Blocks(): # will throw errors calling ui function without this
-        for script in script_runner.scripts:
-            if script.ui(script.is_img2img):
-                ui_default_values = []
-                for elem in script.ui(script.is_img2img):
-                    ui_default_values.append(elem.value)
-                full_script_args[script.args_from:script.args_to] = ui_default_values
-                
-
-    if script_name:
-        script_index = [script.title().lower() for script in script_runner.selectable_scripts].index(script_name.lower())
-        script = script_runner.selectable_scripts[script_index]
-        full_script_args[script.args_from:script.args_to] = script_args
-        full_script_args[0] = script_index + 1
-
-    if alwayson_scripts:
-        for alwayson_script_name in alwayson_scripts.keys():
-            alwayson_script = script_runner.scripts[[script.title().lower() for script in script_runner.scripts].index(alwayson_script_name.lower())]
-            if "args" in alwayson_scripts[alwayson_script_name]:
-                for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(alwayson_scripts[alwayson_script_name]['args']))):
-                    full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]['args'][idx]
-
-    args.pop('script_name', None)
-    args.pop('script_args', None)
-    args.pop('alwayson_scripts', None)
-    args.pop('send_images', True)
-    args.pop('save_images', None)
-
-    processed = []
-
-    with closing(StableDiffusionProcessingImg2Img(sd_model=shared.sd_model, **args)) as p:
-        p.init_images = [decode_base64_to_image(x) for x in args.get('init_images')]
-        p.is_api = False
-        p.outpath_grids = opts.outdir_img2img_grids
-        p.outpath_samples = opts.outdir_img2img_samples
-
-        try:
-            shared.state.begin(job="scripts_img2img")
-            if script_name is not None:
-                p.script_args = full_script_args
-                processed = scripts.scripts_img2img.run(p, *p.script_args)
+                processed = script_runner.run(p, *p.script_args)
             else:
                 p.script_args = tuple(full_script_args)
                 processed = process_images(p)
@@ -280,21 +210,9 @@ async def consume():
                             continue  # Skip the current iteration and move to the next message
 
                         progress_task = asyncio.create_task(report_progress(reportProgress))
-                        processed = []
-
-                        if api == 'txt2img':
-                            processed = process_txt2img(args)
-
-                        if api == 'img2img':
-                            processed = process_img2img(args)
-
+                        processed = process_image(api, args)
                         progress_task.cancel()
-
-                        if processed.images:
-                            hashes = await upload_images(processed.images)
-                        else:
-                            hashes = []
-                        print(f"hashes {hashes}")
+                        hashes = await upload_images(processed.images)
                         data = { "result": { "images": hashes } }
                         response = requests.post(reportResult, json=data)
                         print(f"[x] Finall Result: {response}")
