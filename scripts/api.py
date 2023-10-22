@@ -167,7 +167,7 @@ def process_img2img(args):
     alwayson_scripts = args.get('alwayson_scripts', None)
     script = None
 
-    script_runner = scripts.scripts_txt2img
+    script_runner = scripts.scripts_img2img
     if not script_runner.scripts:
         script_runner.initialize_scripts(False)
 
