@@ -46,6 +46,7 @@ def image_buffer(image):
 
 
 def get_progress():
+    from modules import scripts, shared
     if shared.state.job_count == 0:
         return 0, None
 
@@ -76,9 +77,6 @@ async def upload_images(images: list):
             filename = entry['Name']
             filehash = entry['Hash']
             hashes.append(filehash)
-            print(f'File uploaded {entry}')
-    
-    print(f'Processed images: {hashes}')
     return hashes
 
 
@@ -215,7 +213,7 @@ async def consume():
                         hashes = await upload_images(processed.images)
                         data = { "result": { "images": hashes } }
                         response = requests.post(reportResult, json=data)
-                        print(f"[x] Finall Result: {response}")
+                        print(f"[x] Finall Result: {hashes}")
                     except Exception as e:
                         print("[x] Error occur on processing task.")
                         print(e)
