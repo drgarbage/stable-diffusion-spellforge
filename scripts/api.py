@@ -68,6 +68,32 @@ def get_progress():
     return progress, progressImage
 
 
+async def report_progress(report_url):
+    while True:
+        progress, progressImage = get_progress()
+
+        if progress == 0:
+            continue
+
+        if progress >= 1:
+            return
+
+        progressImageHash = None
+        if progressImage is not None:
+            hashes = await upload_images([progressImage])
+            progressImageHash = hashes[0]
+
+        data = { "progress": progress, "progressImage": progressImageHash }
+
+        try:
+            response = requests.post(report_url, json=data)
+            print(f"[x] Progress: {progress}% - {response}")
+        except Exception as e:
+            print("[x] Error occur on reporting progress.")
+            print(e)
+        await asyncio.sleep(1)
+
+
 async def upload_images(images: list):
     hashes = []
     async with aioipfs.AsyncIPFS(maddr=Multiaddr('/dns4/ai.printii.com/tcp/5001/http')) as client:
@@ -82,7 +108,7 @@ async def upload_images(images: list):
 
 def process_image(api, args):
     from contextlib import closing
-    from modules import scripts, shared
+    from modules import scripts, shared, ui
     from modules.shared import opts
     from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
 
@@ -108,15 +134,21 @@ def process_image(api, args):
 
     if not script_runner.scripts:
         script_runner.initialize_scripts(False)
+        ui.create_ui()
 
-    max_args = max((script.args_to for script in script_runner.scripts if script.args_to is not None), default=1)
+    max_args = 1
+    for script in script_runner.scripts:
+        if max_args < script.args_to:
+            max_args = script.args_to
     full_script_args = [None] * max_args
     full_script_args[0] = 0
 
     with gr.Blocks():
         for script in script_runner.scripts:
             if script.ui(script.is_img2img):
-                ui_default_values = [elem.value for elem in script.ui(script.is_img2img)]
+                ui_default_values = []
+                for elem in script.ui(script.is_img2img):
+                    ui_default_values.append(elem.value)
                 full_script_args[script.args_from:script.args_to] = ui_default_values
 
     if script_name:
@@ -126,12 +158,19 @@ def process_image(api, args):
         full_script_args[0] = script_index + 1
 
     if alwayson_scripts:
-        for alwayson_script_name, alwayson_script_data in alwayson_scripts.items():
-            alwayson_script = script_runner.scripts[[script.title().lower() for script in script_runner.scripts].index(alwayson_script_name.lower())]
-            if "args" in alwayson_script_data:
-                args_range = range(alwayson_script.args_from, alwayson_script.args_to)
-                for idx, arg in zip(args_range, alwayson_script_data['args']):
-                    full_script_args[idx] = arg
+        for alwayson_script_name in alwayson_scripts.keys():
+            alwayson_script_index = [script.title().lower() for script in scripts].index(alwayson_script_name.lower())
+            alwayson_script = script_runner.scripts[alwayson_script_index]
+            print(f"is alwayson: {alwayson_script_name}", alwayson_script.alwayson)
+            if "args" in alwayson_scripts[alwayson_script_name]:
+                for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from)), len(alwayson_scripts[alwayson_script_name]["args"])):
+                    full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]["args"][idx]
+
+    if api == 'img2img':
+        mask = args.get('mask', None)
+        if mask:
+            mask = decode_base64_to_image(mask)
+            args['mask'] = mask;
 
     for key in ['script_name', 'script_args', 'alwayson_scripts', 'send_images', 'save_images']:
         args.pop(key, None)
@@ -147,37 +186,15 @@ def process_image(api, args):
 
         try:
             shared.state.begin(job=job_name)
-            if script_name is not None:
-                p.script_args = full_script_args
-                processed = script_runner.run(p, *p.script_args)
-            else:
-                p.script_args = tuple(full_script_args)
+            p.script_args = full_script_args
+            processed = script_runner.run(p, *p.script_args)
+            if processed is None:
                 processed = process_images(p)
         finally:
             shared.state.end()
             shared.total_tqdm.clear()
 
     return processed
-
-
-async def report_progress(report_url):
-    while True:
-        progress, progressImage = get_progress()
-
-        progressImageHash = None
-        if progressImage is not None:
-            hashes = await upload_images([progressImage])
-            progressImageHash = hashes[0]
-
-        data = { "progress": progress, "progressImage": progressImageHash }
-
-        try:
-            response = requests.post(report_url, json=data)
-            print(f"[x] Progress: {progress}% - {response}")
-        except Exception as e:
-            print("[x] Error occur on reporting progress.")
-            print(e)
-        await asyncio.sleep(1)
 
 
 async def consume():
