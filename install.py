@@ -6,8 +6,8 @@ if not launch.is_installed("aio_pika"):
 if not launch.is_installed("aioipfs"):
     launch.run_pip("install aioipfs", "requirements for file storage")
 
-if not launch.is_installed("requests"):
-    launch.run_pip("install requests", "requirements for reporting result")
+if not launch.is_installed("httpx"):
+    launch.run_pip("install httpx", "requirements for reporting result")
 
 if not launch.is_installed("rembg"):
     launch.run_pip("install rembg", "requirements for removing background")

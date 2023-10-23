@@ -3,7 +3,7 @@ import base64
 import asyncio
 import threading
 import json
-import requests
+import httpx
 import gradio as gr
 import aio_pika
 import aioipfs
@@ -69,11 +69,11 @@ def get_progress():
 
 
 async def report_progress(report_url):
-    while True:
+    try:
         progress, progressImage = get_progress()
 
         if progress == 0:
-            continue
+            return
 
         if progress >= 1:
             return
@@ -85,12 +85,13 @@ async def report_progress(report_url):
 
         data = { "progress": progress, "progressImage": progressImageHash }
 
-        try:
-            response = requests.post(report_url, json=data)
-            print(f"[x] Progress: {progress}% - {response}")
-        except Exception as e:
-            print("[x] Error occur on reporting progress.")
-            print(e)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(report_url, json=data)
+
+    except Exception as e:
+        print("[x] Error occur on reporting progress.")
+        print(e)
+    finally:
         await asyncio.sleep(1)
 
 
@@ -106,7 +107,7 @@ async def upload_images(images: list):
     return hashes
 
 
-def process_image(api, args):
+async def process_image(api, args):
     from contextlib import closing
     from modules import scripts, shared, ui
     from modules.shared import opts
@@ -171,6 +172,10 @@ def process_image(api, args):
         if mask:
             mask = decode_base64_to_image(mask)
             args['mask'] = mask;
+    
+    if "sampler_index" in args and "sampler_name" not in args:
+        args["sampler_name"] = args["sampler_index"]
+        args.pop("sampler_index")
 
     for key in ['script_name', 'script_args', 'alwayson_scripts', 'send_images', 'save_images']:
         args.pop(key, None)
@@ -197,61 +202,63 @@ def process_image(api, args):
     return processed
 
 
-async def consume():
+async def on_message(message: aio_pika.IncomingMessage):
+    async with message.process():
+        try:
+            print(f"[x] Accepted Generation Request...")
+
+            msg = json.loads(message.body.decode())
+            api = msg.get('api')
+            args = msg.get('params') 
+            reportProgress = msg.get('reportProgress')
+            reportResult = msg.get('reportResult')
+
+            print(f"[x] Processing SpellForge {api}...")
+
+            if not api:
+                print("[x] API is None. Skipping this message.")
+                return  # Skip the current iteration and move to the next message
+
+            progress_event = threading.Event()
+
+            async def run_report_progress():
+                while not progress_event.is_set():
+                    await report_progress(reportProgress)
+
+            progress_thread = threading.Thread(target=lambda: asyncio.run(run_report_progress()))
+            progress_thread.start()
+
+            processed = await process_image(api, args)
+            
+            progress_event.set()
+
+            hashes = await upload_images(processed.images)
+            data = { "result": { "images": hashes } }
+            async with httpx.AsyncClient() as client:
+                response = await client.post(reportResult, json=data)
+            print(f"[x] Finall Result: {hashes}")
+
+        except Exception as e:
+            data = { "result": { "images": [] }, "error": e }
+            async with httpx.AsyncClient() as client:
+                response = await client.post(reportResult, json=data)
+            print("[x] Error occur on processing task.")
+            print(e)
+
+
+async def regist_worker():
     connection = await aio_pika.connect_robust("amqp://ai.printii.com")
-    
-    async with connection:
-        channel = await connection.channel()
-        queue = await channel.declare_queue('generation', durable=False)
-
-        print('[x] SpellForge Generation Worker is running.')
-
-        async with queue.iterator() as queue_iter:
-            async for message in queue_iter:
-                async with message.process():
-                    try:
-                        print(f"[x] Accepted Generation Request...")
-
-                        msg = json.loads(message.body.decode())
-                        api = msg.get('api')
-                        args = msg.get('params') 
-                        reportProgress = msg.get('reportProgress')
-                        reportResult = msg.get('reportResult')
-
-                        print(f"[x] Processing SpellForge {api}...")
-
-                        if not api:
-                            print("[x] API is None. Skipping this message.")
-                            continue  # Skip the current iteration and move to the next message
-
-                        progress_task = asyncio.create_task(report_progress(reportProgress))
-                        processed = process_image(api, args)
-                        progress_task.cancel()
-                        hashes = await upload_images(processed.images)
-                        data = { "result": { "images": hashes } }
-                        response = requests.post(reportResult, json=data)
-                        print(f"[x] Finall Result: {hashes}")
-                    except Exception as e:
-                        print("[x] Error occur on processing task.")
-                        print(e)
-                    
-
-def run_consume_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(consume())
+    channel = await connection.channel()
+    queue = await channel.declare_queue('generation', durable=False)
+    await queue.consume(on_message)
+    print('[x] SpellForge Generation Worker is running.')
+    try:
+        await asyncio.Future()
+    finally:
+        await connection.close()
 
 
-def regist_worker():
-    # Start consume function in a separate thread
-    consume_thread = threading.Thread(target=run_consume_loop)
-    consume_thread.start()
-
-    # Optionally, return the consume_thread in case you want to join it later
-    return consume_thread
-
-
-def rembg_api(_: gr.Blocks, app: FastAPI):
+def rembg_api(app: FastAPI):
 
     @app.get("/sdapi/v1/rembg/version")
     async def version():
@@ -283,12 +290,14 @@ def rembg_api(_: gr.Blocks, app: FastAPI):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    regist_worker()
+
+def regisit_services(_: gr.Blocks, app: FastAPI):
+    rembg_api(app)
+    asyncio.run(regist_worker())
 
 
 try:
     import modules.script_callbacks as script_callbacks
-
-    script_callbacks.on_app_started(rembg_api)
+    script_callbacks.on_app_started(regisit_services)
 except:
     pass
