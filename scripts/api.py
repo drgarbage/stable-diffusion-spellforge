@@ -204,6 +204,7 @@ async def process_image(api, args):
 
 async def on_message(message: aio_pika.IncomingMessage):
     async with message.process():
+
         try:
             print(f"[x] Accepted Generation Request...")
 
@@ -249,6 +250,7 @@ async def on_message(message: aio_pika.IncomingMessage):
 async def regist_worker():
     connection = await aio_pika.connect_robust("amqp://ai.printii.com")
     channel = await connection.channel()
+    await channel.set_qos(prefetch_count=1)
     queue = await channel.declare_queue('generation', durable=False)
     await queue.consume(on_message)
     print('[x] SpellForge Generation Worker is running.')
