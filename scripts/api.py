@@ -101,10 +101,9 @@ async def upload_images(images: list):
         for image in images:
             file = image_buffer(image)
             entry = await client.core.add_bytes(file.getvalue(), to_files='/photo.png')
-            cid = entry["Cid"]["/"]
             filehash = entry['Hash']
-            filename = f"{cid}.png"
-            await client.files.cp(f"/ipfs/{cid}", f"/{filename}")
+            filename = f"{filehash}.png"
+            await client.files.cp(f"/ipfs/{filehash}", f"/{filename}")
             hashes.append(filehash)
     return hashes
 
