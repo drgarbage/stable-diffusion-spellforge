@@ -89,8 +89,8 @@ async def report_progress(report_url):
             response = await client.post(report_url, json=data)
 
     except Exception as e:
-        print("[x] Error occur on reporting progress.")
-        print(e)
+        print("[x] Error occur on reporting progress.", e)
+
     finally:
         await asyncio.sleep(1)
 
@@ -100,11 +100,14 @@ async def upload_images(images: list):
     async with aioipfs.AsyncIPFS(maddr=Multiaddr('/dns4/ai.printii.com/tcp/5001/http')) as client:
         for image in images:
             file = image_buffer(image)
-            entry = await client.core.add_bytes(file.getvalue(), to_files='/photo.png')
+            entry = await client.core.add_bytes(file.getvalue())
             filehash = entry['Hash']
             filename = f"{filehash}.png"
-            await client.files.cp(f"/ipfs/{filehash}", f"/{filename}")
-            hashes.append(filehash)
+            try:
+                await client.files.cp(f"/ipfs/{filehash}", f"/{filename}")
+                hashes.append(filehash)
+            except Exception as e:
+                print("[x] Unable to rename resource: {filehash}", e)
     return hashes
 
 
@@ -114,93 +117,98 @@ async def process_image(api, args):
     from modules.shared import opts
     from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
 
-    script_name = args.get('script_name', None)
-    script_args = args.get('script_args', [])
-    alwayson_scripts = args.get('alwayson_scripts', None)
-    script = None
-
-    if api == 'txt2img':
-        script_runner = scripts.scripts_txt2img
-        processing_class = StableDiffusionProcessingTxt2Img
-        outpath_grids = opts.outdir_txt2img_grids
-        outpath_samples = opts.outdir_txt2img_samples
-        job_name = "scripts_txt2img"
-    elif api == 'img2img':
-        script_runner = scripts.scripts_img2img
-        processing_class = StableDiffusionProcessingImg2Img
-        outpath_grids = opts.outdir_img2img_grids
-        outpath_samples = opts.outdir_img2img_samples
-        job_name = "scripts_img2img"
-    else:
-        raise ValueError("Invalid API")
-
-    if not script_runner.scripts:
-        script_runner.initialize_scripts(False)
-        ui.create_ui()
-
-    max_args = 1
-    for script in script_runner.scripts:
-        if max_args < script.args_to:
-            max_args = script.args_to
-    full_script_args = [None] * max_args
-    full_script_args[0] = 0
-
-    with gr.Blocks():
-        for script in script_runner.scripts:
-            if script.ui(script.is_img2img):
-                ui_default_values = []
-                for elem in script.ui(script.is_img2img):
-                    ui_default_values.append(elem.value)
-                full_script_args[script.args_from:script.args_to] = ui_default_values
-
-    if script_name:
-        script_index = [script.title().lower() for script in script_runner.selectable_scripts].index(script_name.lower())
-        script = script_runner.selectable_scripts[script_index]
-        full_script_args[script.args_from:script.args_to] = script_args
-        full_script_args[0] = script_index + 1
-
-    if alwayson_scripts:
-        for alwayson_script_name in alwayson_scripts.keys():
-            alwayson_script_index = [script.title().lower() for script in scripts].index(alwayson_script_name.lower())
-            alwayson_script = script_runner.scripts[alwayson_script_index]
-            print(f"is alwayson: {alwayson_script_name}", alwayson_script.alwayson)
-            if "args" in alwayson_scripts[alwayson_script_name]:
-                for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from)), len(alwayson_scripts[alwayson_script_name]["args"])):
-                    full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]["args"][idx]
-
-    if api == 'img2img':
-        mask = args.get('mask', None)
-        if mask:
-            mask = decode_base64_to_image(mask)
-            args['mask'] = mask;
-    
-    if "sampler_index" in args and "sampler_name" not in args:
-        args["sampler_name"] = args["sampler_index"]
-        args.pop("sampler_index")
-
-    for key in ['script_name', 'script_args', 'alwayson_scripts', 'send_images', 'save_images']:
-        args.pop(key, None)
-
     processed = []
 
-    with closing(processing_class(sd_model=shared.sd_model, **args)) as p:
+    try:
+
+        script_name = args.get('script_name', None)
+        script_args = args.get('script_args', [])
+        alwayson_scripts = args.get('alwayson_scripts', None)
+        script = None
+
+        if api == 'txt2img':
+            script_runner = scripts.scripts_txt2img
+            processing_class = StableDiffusionProcessingTxt2Img
+            outpath_grids = opts.outdir_txt2img_grids
+            outpath_samples = opts.outdir_txt2img_samples
+            job_name = "scripts_txt2img"
+        elif api == 'img2img':
+            script_runner = scripts.scripts_img2img
+            processing_class = StableDiffusionProcessingImg2Img
+            outpath_grids = opts.outdir_img2img_grids
+            outpath_samples = opts.outdir_img2img_samples
+            job_name = "scripts_img2img"
+        else:
+            raise ValueError("Invalid API")
+
+        if not script_runner.scripts:
+            script_runner.initialize_scripts(False)
+            ui.create_ui()
+
+        max_args = 1
+        for script in script_runner.scripts:
+            if max_args < script.args_to:
+                max_args = script.args_to
+        full_script_args = [None] * max_args
+        full_script_args[0] = 0
+
+        with gr.Blocks():
+            for script in script_runner.scripts:
+                if script.ui(script.is_img2img):
+                    ui_default_values = []
+                    for elem in script.ui(script.is_img2img):
+                        ui_default_values.append(elem.value)
+                    full_script_args[script.args_from:script.args_to] = ui_default_values
+
+        if script_name:
+            script_index = [script.title().lower() for script in script_runner.selectable_scripts].index(script_name.lower())
+            script = script_runner.selectable_scripts[script_index]
+            full_script_args[script.args_from:script.args_to] = script_args
+            full_script_args[0] = script_index + 1
+
+        if alwayson_scripts:
+            for alwayson_script_name in alwayson_scripts.keys():
+                alwayson_script_index = [script.title().lower() for script in scripts].index(alwayson_script_name.lower())
+                alwayson_script = script_runner.scripts[alwayson_script_index]
+                print(f"is alwayson: {alwayson_script_name}", alwayson_script.alwayson)
+                if "args" in alwayson_scripts[alwayson_script_name]:
+                    for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from)), len(alwayson_scripts[alwayson_script_name]["args"])):
+                        full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]["args"][idx]
+
         if api == 'img2img':
-            p.init_images = [decode_base64_to_image(x) for x in args.get('init_images')]
-        p.is_api = False
-        p.outpath_grids = outpath_grids
-        p.outpath_samples = outpath_samples
+            mask = args.get('mask', None)
+            if mask:
+                mask = decode_base64_to_image(mask)
+                args['mask'] = mask;
+        
+        if "sampler_index" in args and "sampler_name" not in args:
+            args["sampler_name"] = args["sampler_index"]
+            args.pop("sampler_index")
 
-        try:
-            shared.state.begin(job=job_name)
-            p.script_args = full_script_args
-            processed = script_runner.run(p, *p.script_args)
-            if processed is None:
-                processed = process_images(p)
-        finally:
-            shared.state.end()
-            shared.total_tqdm.clear()
+        for key in ['script_name', 'script_args', 'alwayson_scripts', 'send_images', 'save_images']:
+            args.pop(key, None)
 
-    return processed
+        with closing(processing_class(sd_model=shared.sd_model, **args)) as p:
+            if api == 'img2img':
+                p.init_images = [decode_base64_to_image(x) for x in args.get('init_images')]
+            p.is_api = False
+            p.outpath_grids = outpath_grids
+            p.outpath_samples = outpath_samples
+
+            try:
+                shared.state.begin(job=job_name)
+                p.script_args = full_script_args
+                processed = script_runner.run(p, *p.script_args)
+                if processed is None:
+                    processed = process_images(p)
+            finally:
+                shared.state.end()
+                shared.total_tqdm.clear()
+
+        return processed
+    except Exception as e:
+        print(f"[x] Error occur on processing image: {e}")
+        return processed
 
 
 async def on_message(message: aio_pika.IncomingMessage):
