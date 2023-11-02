@@ -111,7 +111,7 @@ async def upload_images(images: list):
                 await client.files.cp(f"/ipfs/{filehash}", f"/{filename}")
                 hashes.append(filehash)
             except Exception as e:
-                print("[x] Unable to rename resource: {filehash}", e)
+                print(f"[x] Unable to rename resource: {filehash}", e)
     return hashes
 
 
