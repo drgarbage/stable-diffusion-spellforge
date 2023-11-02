@@ -96,6 +96,10 @@ async def report_progress(report_url):
 
 
 async def upload_images(images: list):
+    if not images:
+        print("No images in list.")
+        return
+    
     hashes = []
     async with aioipfs.AsyncIPFS(maddr=Multiaddr('/dns4/ai.printii.com/tcp/5001/http')) as client:
         for image in images:
@@ -168,11 +172,10 @@ async def process_image(api, args):
 
         if alwayson_scripts:
             for alwayson_script_name in alwayson_scripts.keys():
-                alwayson_script_index = [script.title().lower() for script in scripts].index(alwayson_script_name.lower())
+                alwayson_script_index = [script.title().lower() for script in script_runner.scripts].index(alwayson_script_name.lower())
                 alwayson_script = script_runner.scripts[alwayson_script_index]
-                print(f"is alwayson: {alwayson_script_name}", alwayson_script.alwayson)
                 if "args" in alwayson_scripts[alwayson_script_name]:
-                    for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from)), len(alwayson_scripts[alwayson_script_name]["args"])):
+                    for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(alwayson_scripts[alwayson_script_name]["args"]))):
                         full_script_args[alwayson_script.args_from + idx] = alwayson_scripts[alwayson_script_name]["args"][idx]
 
         if api == 'img2img':
@@ -191,7 +194,8 @@ async def process_image(api, args):
         with closing(processing_class(sd_model=shared.sd_model, **args)) as p:
             if api == 'img2img':
                 p.init_images = [decode_base64_to_image(x) for x in args.get('init_images')]
-            p.is_api = False
+            p.is_api = True
+            p.scripts = script_runner
             p.outpath_grids = outpath_grids
             p.outpath_samples = outpath_samples
 
@@ -243,9 +247,12 @@ async def on_message(message: aio_pika.IncomingMessage):
             progress_event.set()
 
             hashes = await upload_images(processed.images)
+            
             data = { "result": { "images": hashes } }
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(reportResult, json=data)
+
             print(f"[x] Finall Result: {hashes}")
 
         except Exception as e:
